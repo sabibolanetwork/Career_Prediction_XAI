@@ -1,0 +1,4 @@
+Model,Accuracy,Accuracy (%)
+Decision Tree,0.9,90.0
+Random Forest,0.7,70.0
+Artificial Neural Network,0.6000000238418579,60.00000238418579
