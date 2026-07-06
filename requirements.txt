@@ -4,4 +4,3 @@ joblib
 scikit-learn
 shap
 matplotlib
-tensorflow
