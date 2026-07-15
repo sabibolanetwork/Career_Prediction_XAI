@@ -5,7 +5,7 @@ import os
 import shap
 import matplotlib.pyplot as plt
 
-MODELS_DIR = '/content/models/'
+MODELS_DIR = '/models/'
 
 # Explicitly clear old Streamlit cache allocations to drop historical metrics
 st.cache_resource.clear()
