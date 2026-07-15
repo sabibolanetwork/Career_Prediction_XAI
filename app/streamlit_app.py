@@ -1,3 +1,4 @@
+%%writefile /content/app/streamlit_app.py
 import streamlit as st
 import pandas as pd
 import joblib
@@ -5,37 +6,47 @@ import os
 import shap
 import matplotlib.pyplot as plt
 
-# Path mappings relative to the app directory
-MODELS_DIR = os.path.join(os.path.dirname(__file__), '../models/')
+MODELS_DIR = '/content/models/'
+
+# Explicitly clear old Streamlit cache allocations to drop historical metrics
+st.cache_resource.clear()
 
 st.set_page_config(page_title="Career Prediction XAI", page_icon="🎓", layout="centered")
 
+# --- Heading and New Welcoming Introduction Block ---
 st.title("🎓 Undergraduate Career Prediction System")
-st.write("Enter your academic background, skills, and interests below to generate an AI-driven career recommendation with full XAI explanations.")
+
+# Structured, detailed, yet short introductory card
+st.info("""
+### 🌟 Welcome to the Career Prediction System!
+This AI-driven diagnostic platform is designed to help you discover the optimal career path tailored to your unique academic profile, skill sets, and experiences.
+
+* 📊 **What you will do:** Select your academic grades, technical capabilities, and internship background from the dropdown menus below.
+* ⏱️ **Time required:** Less than 2 minutes.
+* 🔒 **Data Privacy:** Your inputs are processed in real-time to generate predictions and explainable AI (XAI) charts. No personal data is stored or logged.
+""")
+
 st.markdown("---")
 
-# --- Load Model, Unified Encoders, and Initialize SHAP ---
-@st.cache_resource
-def load_project_artifacts():
-    model_path = os.path.join(MODELS_DIR, "best_career_prediction_model.pkl")
-    encoders_path = os.path.join(MODELS_DIR, "label_encoders.pkl")
+# --- Resource Loading Framework V2 ---
+def load_resources():
+    model = joblib.load(os.path.join(MODELS_DIR, "best_career_prediction_model_v2.pkl"))
+    encoders = joblib.load(os.path.join(MODELS_DIR, "label_encoders_v2.pkl"))
+    feature_columns = joblib.load(os.path.join(MODELS_DIR, "feature_columns.pkl"))
     
-    model = joblib.load(model_path)
-    encoders = joblib.load(encoders_path)
-    
-    # Step 12.2: Create SHAP explainer instance using the loaded tree model
-    explainer = shap.TreeExplainer(model)
-    return model, encoders, explainer
+    # Extract underlying decision tree for SHAP
+    base_estimator = model.calibrated_classifiers_[0].estimator
+    explainer = shap.TreeExplainer(base_estimator)
+    return model, encoders, feature_columns, explainer
 
 try:
-    model, encoders, explainer = load_project_artifacts()
+    model, encoders, feature_columns, explainer = load_resources()
 except Exception as e:
-    st.error(f"Failed to load model artifacts. Verify files exist in the models directory. Error: {e}")
+    st.error(f"Failed to load V2 model resources: {e}")
     st.stop()
 
-# --- Create Interactive UI Selectors ---
+# Interactive Selectors (Matches the template features exactly)
 col1, col2 = st.columns(2)
-
 with col1:
     gender = st.selectbox("Gender", encoders["Gender"].classes_)
     age = st.selectbox("Age Range", encoders["Age"].classes_)
@@ -43,94 +54,104 @@ with col1:
     programme = st.selectbox("Programme", encoders["Programme"].classes_)
     cgpa = st.selectbox("CGPA Range", encoders["CGPA"].classes_)
     strongest_area = st.selectbox("Strongest Area", encoders["StrongestArea"].classes_)
-    weakest_area = st.selectbox("Weakest Area", encoders["WeakestArea"].classes_)
-
 with col2:
+    weakest_area = st.selectbox("Weakest Area", encoders["WeakestArea"].classes_)
     programming_skill = st.selectbox("Programming Skill Level", encoders["ProgrammingSkill"].classes_)
     languages_known = st.selectbox("Programming Languages Known", encoders["LanguagesKnown"].classes_)
     projects_completed = st.selectbox("Completed IT Projects?", encoders["ProjectsCompleted"].classes_)
     internship = st.selectbox("Internship/SIWES Experience?", encoders["Internship"].classes_)
-    technical_interest = st.selectbox("Technical Interest Focus", encoders["TechnicalInterest"].classes_)
     data_tools = st.selectbox("Familiarity with Data Tools", encoders["DataTools"].classes_)
     certifications = st.selectbox("Certifications Earned", encoders["Certifications"].classes_)
 
 st.markdown("---")
 
-# --- Form Inference & XAI Explanations Event ---
 if st.button("Predict Optimal Career Path", use_container_width=True):
-    # Package inputs into a matching structured DataFrame
+    # 1. Capture Raw Text Input
     input_data = pd.DataFrame({
         "Gender": [gender], "Age": [age], "Level": [level], "Programme": [programme],
         "CGPA": [cgpa], "StrongestArea": [strongest_area], "WeakestArea": [weakest_area],
         "ProgrammingSkill": [programming_skill], "LanguagesKnown": [languages_known],
         "ProjectsCompleted": [projects_completed], "Internship": [internship],
-        "TechnicalInterest": [technical_interest], "DataTools": [data_tools],
-        "Certifications": [certifications]
+        "DataTools": [data_tools], "Certifications": [certifications]
     })
     
-    # Encode the user input using the loaded encoders dictionary
-    for col in input_data.columns:
-        input_data[col] = encoders[col].transform(input_data[col].astype(str))
+    # 2. Map Text Directly to Separated Encoded Copy
+    encoded_input = input_data.copy()
+    for col in encoded_input.columns:
+        encoded_input[col] = encoders[col].transform(encoded_input[col].astype(str))
         
-    # Predict the career path
-    prediction = model.predict(input_data)[0]
-    predicted_career = encoders["CareerPath"].inverse_transform([prediction])[0]
+    # 3. Force exact model matrix structural column alignment
+    encoded_input = encoded_input[feature_columns]
     
-    # Calculate Prediction Confidence Score if supported by model
-    confidence = model.predict_proba(input_data).max() * 100 if hasattr(model, "predict_proba") else None
+    # 4. Generate Classification Output and Probability Distributions
+    probabilities = model.predict_proba(encoded_input)[0]
+    prediction = probabilities.argmax()
+    predicted_career = encoders["CareerPath"].inverse_transform([prediction])[0]
+    confidence = probabilities.max() * 100
 
-    # Render results visually
+    # Output Primary Layout
     st.success(f"### 🎯 Predicted Career Path: **{predicted_career}**")
-    if confidence is not None:
-        st.metric(label="Prediction Confidence", value=f"{confidence:.2f}%")
-        
+    st.metric(label="Estimated Model Confidence", value=f"{confidence:.1f}%")
+    
     st.markdown("---")
     
-    # ==========================================================
-    # STEP 12: SHAP INTERPRETABILITY EXECUTION
-    # ==========================================================
-    # Step 12.3: Generate SHAP values for the specific input vector
-    shap_values = explainer.shap_values(input_data)
+    # --- DIAGNOSTIC DEBUG ENGINE PANE ---
+    st.markdown("### 🛠️ Systematic Pipeline Debugging Metrics")
     
-    st.subheader("💡 Explainable AI (XAI) Prediction Breakdown")
-    st.write("The matrix and chart below show the features that most strongly influenced this specific prediction path.")
+    col_db1, col_db2 = st.columns(2)
+    with col_db1:
+        st.write("**1. Raw User Input (Widget State Check):**")
+        st.dataframe(input_data, use_container_width=True)
+    with col_db2:
+        st.write("**2. Encoded Array Input (Matrix Check):**")
+        st.dataframe(encoded_input, use_container_width=True)
+        
+    st.write("**3. Live Class Probability Shifts:**")
+    prob_df = pd.DataFrame({
+        "Career Track Option": encoders["CareerPath"].classes_,
+        "Calculated Probability Score": probabilities
+    }).sort_values(by="Calculated Probability Score", ascending=False).reset_index(drop=True)
+    st.dataframe(prob_df, use_container_width=True)
+    
+    st.write("**4. Model Inspection Profile:**")
+    st.caption(f"Loaded Pipeline Class: `{type(model).__name__}` | Base Target Alignment: `{list(feature_columns)}`")
+    
+    st.markdown("---")
+    
+    # --- SHAP Interpretation ---
+    try:
+        shap_values = explainer.shap_values(encoded_input)
+        st.subheader("💡 Explainable AI (XAI) Prediction Breakdown")
+        
+        if isinstance(shap_values, list):
+            shap_contributions = shap_values[prediction][0]
+        elif len(shap_values.shape) == 3:
+            shap_contributions = shap_values[0, :, prediction]
+        else:
+            shap_contributions = shap_values[0]
 
-    # Step 12.4: Calculate multi-class local feature contributions
-    predicted_class = prediction
-    feature_names = input_data.columns
-    
-    # Handle both binary list outputs and raw 3D multiclass array shapes cleanly
-    if isinstance(shap_values, list):
-        shap_contributions = shap_values[predicted_class][0]
-    elif len(shap_values.shape) == 3:
-        shap_contributions = shap_values[0, :, predicted_class]
-    else:
-        shap_contributions = shap_values[0]
-
-    explanation_df = pd.DataFrame({
-        "Feature": feature_names,
-        "Contribution": shap_contributions
-    })
-    
-    explanation_df["Absolute Contribution"] = explanation_df["Contribution"].abs()
-    explanation_df = explanation_df.sort_values(by="Absolute Contribution", ascending=False).reset_index(drop=True)
-    
-    # Display the top five contributing variables in a data frame
-    st.write("**Top 5 Influential Factors Matrix:**")
-    st.dataframe(explanation_df[["Feature", "Contribution"]].head(5), use_container_width=True)
-    
-    # Step 12.5: Display the clear text summary sentence
-    top_feature = explanation_df.iloc[0]["Feature"]
-    st.info(f"🔍 **Core Assessment Insight:** The most influential factor directing this specific prediction model recommendation was **{top_feature}**.")
-    
-    # Step 12.6: Generate local feature importance chart
-    fig, ax = plt.subplots(figsize=(8, 4))
-    top_five_df = explanation_df.head(5).sort_values(by="Absolute Contribution", ascending=True)
-    
-    ax.barh(top_five_df["Feature"], top_five_df["Absolute Contribution"], color="dodgerblue", edgecolor="black", height=0.5)
-    ax.set_title("Top 5 Feature Contribution Magnitudes", fontsize=12, fontweight='bold')
-    ax.set_xlabel("Absolute SHAP Impact Value")
-    ax.grid(axis='x', linestyle='--', alpha=0.5)
-    
-    plt.tight_layout()
-    st.pyplot(fig)
+        explanation_df = pd.DataFrame({"Feature": encoded_input.columns, "Contribution": shap_contributions})
+        explanation_df["Absolute Contribution"] = explanation_df["Contribution"].abs()
+        explanation_df = explanation_df.sort_values(by="Absolute Contribution", ascending=False).reset_index(drop=True)
+        
+        top_features = explanation_df.head(3)
+        feature_text = ", ".join(top_features["Feature"].tolist())
+        st.write(f"The most influential factors in this recommendation were **{feature_text}**.")
+        
+        fig, ax = plt.subplots(figsize=(8, 4))
+        top_five_df = explanation_df.head(5).sort_values(by="Absolute Contribution", ascending=True)
+        ax.barh(top_five_df["Feature"], top_five_df["Absolute Contribution"], color="dodgerblue", edgecolor="black", height=0.5)
+        ax.set_title("Top 5 Feature Contribution Magnitudes")
+        plt.tight_layout()
+        st.pyplot(fig)
+        
+        st.info(
+            """
+            **How to read this explanation**
+            Each bar shows how a student characteristic influenced the recommended career. 
+            Positive contributions pushed the model toward the displayed career, while negative contributions pushed it away. 
+            Longer bars indicate a stronger influence. The explanation describes the model's reasoning; it does not prove that a feature causes a particular career outcome.
+            """
+        )
+    except Exception as e:
+        st.warning(f"SHAP diagnostics pending interface sync. Error: {e}")
